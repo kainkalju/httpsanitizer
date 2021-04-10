@@ -452,9 +452,14 @@ func validateStripSQLia(k *koanf.Koanf, name string, value string) string {
 				match = true
 			}
 		}
+		if strings.Contains(s, "DROP") || strings.Contains(s, "TRUNCATE") || strings.Contains(s, "RENAME") {
+			if strings.Contains(s, "TABLE") {
+				match = true
+			}
+		}
 		if match {
 			log.Printf("strip_sqlia matches: %v", value)
-			value = valid.ReplacePattern(value, "(?i)(update|select|insert|delete)", "xxxxxx")
+			value = valid.ReplacePattern(value, "(?i)(update|select|insert|delete|drop|truncate|rename)", "xxxxxx")
 		}
 	}
 
