@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -19,6 +22,8 @@ import (
 var k = koanf.New(".")
 
 func main() {
+	var execCmd string = ""
+	var upstreamURL = "http://127.0.0.1:9000/"
 	var serverAddr string = ":8080"
 	var serverReadTimeout time.Duration = 10
 	var serverWriteTimeout time.Duration = 10
@@ -31,6 +36,12 @@ func main() {
 		log.Fatalf("error loading config: %v", err)
 	}
 	// Overwrite default settings with YAML config
+	if k.Exists("upstream.url") {
+		upstreamURL = k.String("upstream.url")
+	}
+	if k.Exists("upstream.exec") {
+		execCmd = k.String("upstream.exec")
+	}
 	if k.Exists("server.addr") {
 		serverAddr = k.String("server.addr")
 	}
@@ -60,8 +71,23 @@ func main() {
 		k.Print()
 	})
 
+	if execCmd != "" {
+		cmd := execProgram(execCmd)
+		// wait `cmd` until it finishes when exit
+		defer cmd.Wait()
+		// monitoting program in a goroutine
+		go func() {
+			for {
+				cmd.Wait()
+				log.Println("WARN: background process exited.")
+				// try to start again
+				cmd = execProgram(execCmd)
+			}
+		}()
+	}
+
 	router := httprouter.New()
-	origin, _ := url.Parse("http://localhost:9000/")
+	origin, _ := url.Parse(upstreamURL)
 	path := "/*catchall"
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(origin)
@@ -88,13 +114,6 @@ func main() {
 		newBody := data.Encode()
 		req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
 		req.ContentLength = int64(len(newBody))
-
-		// wildcardIndex := strings.IndexAny(path, "*")
-		// proxyPath := singleJoiningSlash(origin.Path, req.URL.Path[wildcardIndex:])
-		// if strings.HasSuffix(proxyPath, "/") && len(proxyPath) > 1 {
-		// 	proxyPath = proxyPath[:len(proxyPath)-1]
-		// }
-		// req.URL.Path = proxyPath
 	}
 
 	router.Handle("HEAD", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -123,4 +142,22 @@ func main() {
 	}
 	log.Println("Starting the httpsanitizer reverse proxy server")
 	log.Fatal(server.ListenAndServe())
+}
+
+func execProgram(execCmd string) *exec.Cmd {
+	args := strings.Split(execCmd, " ")
+
+	// setup background command
+	cmd := &exec.Cmd{
+		Path:   args[0],
+		Args:   args,
+		Stdout: os.Stdout,
+		Stderr: os.Stdout,
+	}
+	// run `cmd` in background
+	cmd.Start()
+
+	log.Println("Stated background process:", execCmd)
+
+	return cmd
 }

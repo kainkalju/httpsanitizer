@@ -1,4 +1,7 @@
 ---
+upstream:
+  url: http://127.0.0.1:9000/
+  exec: ./sleep.sh 60
 server:
   addr: ":8080"
   readTimeout: 10
