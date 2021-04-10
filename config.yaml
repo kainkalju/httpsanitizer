@@ -32,6 +32,8 @@ http_header_in:
     - User-Agent
     - Content-Length
     - Content-Type
+    - X-Forwarded-Host
+    - X-Origin-Host
 form_params:
   text:
     type: string

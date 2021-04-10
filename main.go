@@ -98,9 +98,9 @@ func main() {
 			sanitizingPOST(req, k)
 		}
 
-		sanitizingIncomingHeaders(req, k)
 		req.Header.Add("X-Forwarded-Host", req.Host)
 		req.Header.Add("X-Origin-Host", origin.Host)
+		sanitizingIncomingHeaders(req, k)
 		req.URL.Scheme = origin.Scheme
 		req.URL.Host = origin.Host
 		//req.URL.RawQuery = "foo=bar&1=2" // get query_string
