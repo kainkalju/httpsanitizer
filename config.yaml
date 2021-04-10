@@ -36,7 +36,7 @@ http_header_in:
     - X-Origin-Host
 form_params:
   text:
-    type: string
+    type: text
     maxlen: 10
     strip_html: true
     strip_chars: "'`/"
@@ -46,21 +46,24 @@ form_params:
     type: numeric
     maxval: 4294967296
   email:
-    type: e-mail
+    type: email
     maxlen: 200
     strip_chars: "'`/"
   ip:
     type: ip
   url:
     type: url
+    maxlen: 200
     strip_chars: "'`"
     strip_binary: true
   path:
     type: path
+    maxlen: 100
     strip_chars: "'`"
     strip_binary: true
   filename:
     type: filename
+    maxlen: 50
     strip_chars: "'`"
     strip_binary: true
   time:

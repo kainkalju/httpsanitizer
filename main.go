@@ -104,20 +104,6 @@ func main() {
 		req.URL.Scheme = origin.Scheme
 		req.URL.Host = origin.Host
 		//req.URL.RawQuery = "foo=bar&1=2" // get query_string
-
-		data := url.Values{}
-		req.ParseForm()
-		for k, vv := range req.PostForm {
-			for _, v := range vv {
-				if k == "test" {
-					v = "censored"
-				}
-				data.Set(k, v)
-			}
-		}
-		newBody := data.Encode()
-		req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
-		req.ContentLength = int64(len(newBody))
 	}
 
 	router.Handle("HEAD", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -200,4 +186,48 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 }
 
 func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
+	data := url.Values{}
+	req.ParseForm()
+	for name, values := range req.PostForm {
+		for _, value := range values {
+			p := "form_params." + name
+			if k.Exists(p) {
+				log.Printf("post sanitizing: %v\n", name)
+
+				switch t := k.String(p + ".type"); t {
+				case "text":
+					value = validateMaxLen(k, p, value)
+				case "numeric":
+				case "email":
+					value = validateMaxLen(k, p, value)
+				case "ip":
+				case "url":
+					value = validateMaxLen(k, p, value)
+				case "path":
+					value = validateMaxLen(k, p, value)
+				case "filename":
+					value = validateMaxLen(k, p, value)
+				case "unixtime":
+				default:
+				}
+			}
+			data.Add(name, value)
+		}
+	}
+
+	newBody := data.Encode()
+	req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
+	req.ContentLength = int64(len(newBody))
+}
+
+func validateMaxLen(k *koanf.Koanf, name string, value string) string {
+
+	if k.Exists(name + ".maxlen") {
+		maxlen := k.Int(name + ".maxlen")
+		if len(value) > maxlen {
+			value = value[:maxlen]
+		}
+	}
+
+	return value
 }
