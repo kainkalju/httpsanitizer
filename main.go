@@ -201,6 +201,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
 				case "numeric":
+					value = validateNumeric(value)
 				case "email":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
@@ -260,5 +261,10 @@ func validateStripBinary(k *koanf.Koanf, name string, value string) string {
 		value = valid.Trim(value, "")
 	}
 
+	return value
+}
+
+func validateNumeric(value string) string {
+	value = valid.WhiteList(value, "1234567890,.")
 	return value
 }
