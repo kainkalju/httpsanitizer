@@ -292,6 +292,8 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 					value = validateFilePath(value)
 				case "unixtime":
 					value = validateUnixTime(value)
+				case "absent":
+					value = ""
 				default:
 				}
 			}
@@ -353,6 +355,8 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateFilePath(value)
 				case "unixtime":
 					value = validateUnixTime(value)
+				case "absent":
+					value = ""
 				default:
 				}
 			}

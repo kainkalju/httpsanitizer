@@ -91,4 +91,6 @@ form_params:
     strip_binary: true
   time:
     type: unixtime
+  malicious:
+    type: absent
   
