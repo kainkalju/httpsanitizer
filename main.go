@@ -213,6 +213,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
+					value = validateURL(value)
 				case "path":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
@@ -291,6 +292,14 @@ func validateUnixTime(value string) string {
 func validateEmail(value string) string {
 	if valid.IsEmail(value) == false {
 		log.Printf("not valid e-mail: %v", value)
+		value = ""
+	}
+	return value
+}
+
+func validateURL(value string) string {
+	if valid.IsRequestURL(value) == false {
+		log.Printf("not valid URL: %v", value)
 		value = ""
 	}
 	return value
