@@ -44,7 +44,6 @@ form_params:
     strip_binary: true
   num:
     type: numeric
-    maxval: 4294967296
   email:
     type: email
     maxlen: 200

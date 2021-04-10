@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	valid "github.com/asaskevich/govalidator"
 	"github.com/julienschmidt/httprouter"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -197,16 +198,21 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 				switch t := k.String(p + ".type"); t {
 				case "text":
 					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
 				case "numeric":
 				case "email":
 					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
 				case "ip":
 				case "url":
 					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
 				case "path":
 					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
 				case "filename":
 					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
 				case "unixtime":
 				default:
 				}
@@ -227,6 +233,16 @@ func validateMaxLen(k *koanf.Koanf, name string, value string) string {
 		if len(value) > maxlen {
 			value = value[:maxlen]
 		}
+	}
+
+	return value
+}
+
+func validateStripChars(k *koanf.Koanf, name string, value string) string {
+
+	if k.Exists(name + ".strip_chars") {
+		filter := k.String(name + ".strip_chars")
+		value = valid.BlackList(value, filter)
 	}
 
 	return value
