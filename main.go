@@ -221,6 +221,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
 				case "unixtime":
+					value = validateUnixTime(value)
 				default:
 				}
 			}
@@ -273,6 +274,14 @@ func validateNumeric(value string) string {
 func validateIP(value string) string {
 	if valid.IsIP(value) == false {
 		log.Printf("not valid IP: %v", value)
+		value = ""
+	}
+	return value
+}
+
+func validateUnixTime(value string) string {
+	if valid.IsUnixTime(value) == false {
+		log.Printf("not valid unixtime: %v", value)
 		value = ""
 	}
 	return value
