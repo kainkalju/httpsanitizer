@@ -227,6 +227,21 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 			}
 		}
 	}
+	if k.Exists("sanitize_http_headers") {
+		p := "sanitize_http_headers"
+		for name := range req.Header {
+			value := req.Header.Get(name)
+			value, _ = url.QueryUnescape(value)
+			value = validateMaxLen(k, p, value)
+			value = validateStripChars(k, p, value)
+			value = validateStripQuotation(k, p, value)
+			value = validateStripBinary(k, p, value)
+			value = validateStripHTML(k, p, value)
+			value = validateStripSQLia(k, p, value)
+			// value = url.QueryEscape(value)
+			req.Header.Set(name, value)
+		}
+	}
 
 }
 
@@ -247,8 +262,10 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 				case "text":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripQuotation(k, p, value)
 					value = validateStripBinary(k, p, value)
 					value = validateStripHTML(k, p, value)
+					value = validateStripSQLia(k, p, value)
 				case "numeric":
 					value = validateNumeric(value)
 				case "email":
@@ -309,6 +326,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateStripQuotation(k, p, value)
 					value = validateStripBinary(k, p, value)
 					value = validateStripHTML(k, p, value)
+					value = validateStripSQLia(k, p, value)
 				case "numeric":
 					value = validateNumeric(value)
 				case "email":
@@ -403,6 +421,41 @@ func validateStripHTML(k *koanf.Koanf, name string, value string) string {
 
 	if k.Exists(name + ".strip_html") {
 		value = valid.RemoveTags(value)
+	}
+
+	return value
+}
+
+func validateStripSQLia(k *koanf.Koanf, name string, value string) string {
+	var match bool
+
+	if k.Exists(name + ".strip_sqlia") {
+		match = false
+		s := strings.ToUpper(value)
+		if strings.Contains(s, "SELECT") {
+			if strings.Contains(s, "FROM") {
+				match = true
+			}
+		}
+		if strings.Contains(s, "UPDATE") {
+			if strings.Contains(s, "SET") {
+				match = true
+			}
+		}
+		if strings.Contains(s, "INSERT") {
+			if strings.Contains(s, "INTO") {
+				match = true
+			}
+		}
+		if strings.Contains(s, "DELETE") {
+			if strings.Contains(s, "FROM") {
+				match = true
+			}
+		}
+		if match {
+			log.Printf("strip_sqlia matches: %v", value)
+			value = valid.ReplacePattern(value, "(?i)(update|select|insert|delete)", "xxxxxx")
+		}
 	}
 
 	return value

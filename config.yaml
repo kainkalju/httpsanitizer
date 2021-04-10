@@ -35,11 +35,19 @@ http_header_in:
     - Content-Type
     - X-Forwarded-Host
     - X-Origin-Host
+sanitize_http_headers:
+  maxlen: 256
+  strip_chars: "'`/"
+  strip_quotation: true
+  strip_binary: true
+  strip_html: true
+  strip_sqlia: true
 sanitize_form_names:
-    strip_chars: "'`/"
-    strip_quotation: true
-    strip_binary: true
-    strip_html: true
+  strip_chars: "'`/"
+  strip_quotation: true
+  strip_binary: true
+  strip_html: true
+  strip_sqlia: true
 form_params:
   _defaults_:
     type: text
@@ -48,6 +56,7 @@ form_params:
     strip_quotation: true
     strip_binary: true
     strip_html: true
+    strip_sqlia: true
   text:
     type: text
     maxlen: 1024
@@ -55,6 +64,7 @@ form_params:
     strip_quotation: true
     strip_binary: true
     strip_html: true
+    strip_sqlia: true
   num:
     type: numeric
   email:
