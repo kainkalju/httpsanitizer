@@ -193,13 +193,14 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 		for _, value := range values {
 			p := "form_params." + name
 			if k.Exists(p) {
-				log.Printf("post sanitizing: %v\n", name)
+				//log.Printf("post sanitizing: %v\n", name)
 
 				switch t := k.String(p + ".type"); t {
 				case "text":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
+					value = validateStripHTML(k, p, value)
 				case "numeric":
 					value = validateNumeric(value)
 				case "email":
@@ -263,8 +264,17 @@ func validateStripChars(k *koanf.Koanf, name string, value string) string {
 func validateStripBinary(k *koanf.Koanf, name string, value string) string {
 
 	if k.Exists(name + ".strip_binary") {
-		value = valid.StripLow(string(value), true)
+		value = valid.StripLow(value, true)
 		value = valid.Trim(value, "")
+	}
+
+	return value
+}
+
+func validateStripHTML(k *koanf.Koanf, name string, value string) string {
+
+	if k.Exists(name + ".strip_html") {
+		value = valid.RemoveTags(value)
 	}
 
 	return value

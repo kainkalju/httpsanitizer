@@ -37,11 +37,12 @@ http_header_in:
 form_params:
   text:
     type: text
-    maxlen: 10
+    maxlen: 1024
     strip_html: true
     strip_chars: "'`/"
     strip_quotation: true
     strip_binary: true
+    strip_html: true
   num:
     type: numeric
   email:
