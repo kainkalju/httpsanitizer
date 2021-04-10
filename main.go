@@ -95,7 +95,14 @@ func main() {
 
 	reverseProxy.Director = func(req *http.Request) {
 
+		if req.Method == "HEAD" {
+			sanitizingGET(req, k)
+		}
+		if req.Method == "GET" {
+			sanitizingGET(req, k)
+		}
 		if req.Method == "POST" {
+			sanitizingGET(req, k)
 			sanitizingPOST(req, k)
 		}
 
@@ -104,7 +111,6 @@ func main() {
 		sanitizingIncomingHeaders(req, k)
 		req.URL.Scheme = origin.Scheme
 		req.URL.Host = origin.Host
-		//req.URL.RawQuery = "foo=bar&1=2" // get query_string
 	}
 
 	router.Handle("HEAD", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -184,6 +190,56 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 		}
 	}
 
+}
+
+func sanitizingGET(req *http.Request, k *koanf.Koanf) {
+	data := url.Values{}
+	for name, values := range req.URL.Query() {
+		for _, value := range values {
+			p := "form_params." + name
+			if k.Exists(p) {
+				//log.Printf("post sanitizing: %v\n", name)
+
+				switch t := k.String(p + ".type"); t {
+				case "text":
+					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
+					value = validateStripHTML(k, p, value)
+				case "numeric":
+					value = validateNumeric(value)
+				case "email":
+					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
+					value = validateEmail(value)
+				case "ip":
+					value = validateIP(value)
+				case "url":
+					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
+					value = validateURL(value)
+				case "path":
+					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
+					value = validatePath(value)
+				case "filename":
+					value = validateMaxLen(k, p, value)
+					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
+					value = validateFilePath(value)
+				case "unixtime":
+					value = validateUnixTime(value)
+				default:
+				}
+			}
+			data.Add(name, value)
+		}
+	}
+
+	req.URL.RawQuery = data.Encode()
 }
 
 func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
