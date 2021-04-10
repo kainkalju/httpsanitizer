@@ -113,6 +113,11 @@ func main() {
 		req.URL.Host = origin.Host
 	}
 
+	reverseProxy.ModifyResponse = func(res *http.Response) error {
+		sanitizingOutgoingHeaders(res, k)
+		return nil
+	}
+
 	router.Handle("HEAD", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		startTime := time.Now()
 		reverseProxy.ServeHTTP(w, r)
@@ -159,6 +164,39 @@ func execProgram(execCmd string) *exec.Cmd {
 	return cmd
 }
 
+func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
+
+	if k.Exists("http_header_out.set") {
+		for _, name := range k.MapKeys("http_header_out.set") {
+			value := k.String("http_header_out.set." + name)
+			res.Header.Set(name, value)
+			log.Println("set header: ", name, value)
+		}
+	}
+	if k.Exists("http_header_out.del") {
+		for _, name := range k.Strings("http_header_out.del") {
+			res.Header.Del(name)
+			log.Println("remove header: ", name)
+		}
+	}
+	if k.Exists("http_header_out.only") {
+		var match bool
+		for n := range res.Header {
+			match = false
+			for _, name := range k.Strings("http_header_out.only") {
+				if name == n {
+					match = true
+				}
+			}
+			if match == false {
+				res.Header.Del(n)
+				log.Println("remove header: ", n)
+			}
+		}
+	}
+
+}
+
 func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 
 	if k.Exists("http_header_in.set") {
@@ -169,7 +207,7 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 		}
 	}
 	if k.Exists("http_header_in.del") {
-		for _, name := range k.MapKeys("http_header_in.del") {
+		for _, name := range k.Strings("http_header_in.del") {
 			req.Header.Del(name)
 			log.Println("remove header: ", name)
 		}

@@ -15,12 +15,13 @@ http_header_out:
     X-Permitted-Cross-Domain-Policies: "none"
     Content-Security-Policy: "default-src 'self'; child-src 'none'"
   del:
-    - Server
+    - Cache-Control
   only:
     - Server
     - Date
     - Content-Length
     - Content-Type
+    - Cache-Control
 http_header_in:
   set:
     User-Agent: httpsanitizer/0.1
