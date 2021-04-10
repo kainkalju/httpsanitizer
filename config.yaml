@@ -1,7 +1,7 @@
 ---
 upstream:
   url: http://127.0.0.1:9000/
-  exec: ./sleep.sh 60
+#  exec: ./sleep.sh 60
 server:
   addr: ":8080"
   readTimeout: 10
@@ -9,7 +9,7 @@ server:
   idleTimeout: 20
   maxHeaderBytes: 4096
 http_header_out:
-  add:
+  set:
     X-XSS_Protection: "1; mode=block"
     X-Content-Type-Options: "nosniff"
     X-Permitted-Cross-Domain-Policies: "none"
@@ -22,13 +22,14 @@ http_header_out:
     - Content-Length
     - Content-Type
 http_header_in:
-  add:
+  set:
     User-Agent: httpsanitizer/0.1
   del:
-    - User-Agent
+    - X-Origin-Host
   only:
     - Host
     - Accept
+    - User-Agent
     - Content-Length
     - Content-Type
 form_params:

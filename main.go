@@ -93,10 +93,14 @@ func main() {
 	reverseProxy := httputil.NewSingleHostReverseProxy(origin)
 
 	reverseProxy.Director = func(req *http.Request) {
+
+		if req.Method == "POST" {
+			sanitizingPOST(req, k)
+		}
+
+		sanitizingIncomingHeaders(req, k)
 		req.Header.Add("X-Forwarded-Host", req.Host)
 		req.Header.Add("X-Origin-Host", origin.Host)
-		// adding CSP header here
-		// try to remove also UNKNOWN headers
 		req.URL.Scheme = origin.Scheme
 		req.URL.Host = origin.Host
 		//req.URL.RawQuery = "foo=bar&1=2" // get query_string
@@ -160,4 +164,40 @@ func execProgram(execCmd string) *exec.Cmd {
 	log.Println("Stated background process:", execCmd)
 
 	return cmd
+}
+
+func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
+
+	if k.Exists("http_header_in.set") {
+		for _, name := range k.MapKeys("http_header_in.set") {
+			value := k.String("http_header_in.set." + name)
+			req.Header.Set(name, value)
+			log.Println("set header: ", name, value)
+		}
+	}
+	if k.Exists("http_header_in.del") {
+		for _, name := range k.MapKeys("http_header_in.del") {
+			req.Header.Del(name)
+			log.Println("remove header: ", name)
+		}
+	}
+	if k.Exists("http_header_in.only") {
+		var match bool
+		for n := range req.Header {
+			match = false
+			for _, name := range k.Strings("http_header_in.only") {
+				if name == n {
+					match = true
+				}
+			}
+			if match == false {
+				req.Header.Del(n)
+				log.Println("remove header: ", n)
+			}
+		}
+	}
+
+}
+
+func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 }
