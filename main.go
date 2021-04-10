@@ -207,6 +207,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
 				case "ip":
+					value = validateIP(value)
 				case "url":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
@@ -266,5 +267,13 @@ func validateStripBinary(k *koanf.Koanf, name string, value string) string {
 
 func validateNumeric(value string) string {
 	value = valid.WhiteList(value, "1234567890,.")
+	return value
+}
+
+func validateIP(value string) string {
+	if valid.IsIP(value) == false {
+		log.Printf("not valid IP: %v", value)
+		value = ""
+	}
 	return value
 }
