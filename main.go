@@ -218,10 +218,12 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
+					value = validatePath(value)
 				case "filename":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
 					value = validateStripBinary(k, p, value)
+					value = validateFilePath(value)
 				case "unixtime":
 					value = validateUnixTime(value)
 				default:
@@ -301,6 +303,22 @@ func validateURL(value string) string {
 	if valid.IsRequestURL(value) == false {
 		log.Printf("not valid URL: %v", value)
 		value = ""
+	}
+	return value
+}
+
+func validatePath(value string) string {
+	if valid.IsRequestURI(value) == false {
+		log.Printf("not valid Path: %v", value)
+		value = ""
+	}
+	return value
+}
+
+func validateFilePath(value string) string {
+	err, _ := valid.IsFilePath(value)
+	if err == false {
+		value = valid.SafeFileName(value)
 	}
 	return value
 }
