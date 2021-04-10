@@ -235,8 +235,13 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 	for name, values := range req.URL.Query() {
 		for _, value := range values {
 			p := "form_params." + name
+			if k.Exists(p) == false {
+				if k.Exists("form_params._defaults_") {
+					p = "form_params._defaults_"
+				}
+			}
 			if k.Exists(p) {
-				//log.Printf("post sanitizing: %v\n", name)
+				//log.Printf("get sanitizing: %v\n", name)
 
 				switch t := k.String(p + ".type"); t {
 				case "text":
@@ -272,6 +277,9 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 					value = validateUnixTime(value)
 				default:
 				}
+			}
+			if k.Exists("sanitize_form_names") {
+				name = validateFormName(k, "sanitize_form_names", name)
 			}
 			data.Add(name, value)
 		}
@@ -286,6 +294,11 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 	for name, values := range req.PostForm {
 		for _, value := range values {
 			p := "form_params." + name
+			if k.Exists(p) == false {
+				if k.Exists("form_params._defaults_") {
+					p = "form_params._defaults_"
+				}
+			}
 			if k.Exists(p) {
 				//log.Printf("post sanitizing: %v\n", name)
 
@@ -293,6 +306,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 				case "text":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripQuotation(k, p, value)
 					value = validateStripBinary(k, p, value)
 					value = validateStripHTML(k, p, value)
 				case "numeric":
@@ -324,6 +338,9 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 				default:
 				}
 			}
+			if k.Exists("sanitize_form_names") {
+				name = validateFormName(k, "sanitize_form_names", name)
+			}
 			data.Add(name, value)
 		}
 	}
@@ -331,6 +348,14 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 	newBody := data.Encode()
 	req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
 	req.ContentLength = int64(len(newBody))
+}
+
+func validateFormName(k *koanf.Koanf, name string, value string) string {
+	value = validateStripChars(k, name, value)
+	value = validateStripQuotation(k, name, value)
+	value = validateStripBinary(k, name, value)
+	value = validateStripHTML(k, name, value)
+	return value
 }
 
 func validateMaxLen(k *koanf.Koanf, name string, value string) string {
@@ -350,6 +375,15 @@ func validateStripChars(k *koanf.Koanf, name string, value string) string {
 	if k.Exists(name + ".strip_chars") {
 		filter := k.String(name + ".strip_chars")
 		value = valid.BlackList(value, filter)
+	}
+
+	return value
+}
+
+func validateStripQuotation(k *koanf.Koanf, name string, value string) string {
+
+	if k.Exists(name + ".strip_quotation") {
+		value = valid.BlackList(value, "\"")
 	}
 
 	return value

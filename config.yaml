@@ -35,11 +35,22 @@ http_header_in:
     - Content-Type
     - X-Forwarded-Host
     - X-Origin-Host
+sanitize_form_names:
+    strip_chars: "'`/"
+    strip_quotation: true
+    strip_binary: true
+    strip_html: true
 form_params:
+  _defaults_:
+    type: text
+    maxlen: 1024
+    strip_chars: "'`/"
+    strip_quotation: true
+    strip_binary: true
+    strip_html: true
   text:
     type: text
     maxlen: 1024
-    strip_html: true
     strip_chars: "'`/"
     strip_quotation: true
     strip_binary: true
