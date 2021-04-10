@@ -199,20 +199,25 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 				case "text":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
 				case "numeric":
 				case "email":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
 				case "ip":
 				case "url":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
 				case "path":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
 				case "filename":
 					value = validateMaxLen(k, p, value)
 					value = validateStripChars(k, p, value)
+					value = validateStripBinary(k, p, value)
 				case "unixtime":
 				default:
 				}
@@ -243,6 +248,16 @@ func validateStripChars(k *koanf.Koanf, name string, value string) string {
 	if k.Exists(name + ".strip_chars") {
 		filter := k.String(name + ".strip_chars")
 		value = valid.BlackList(value, filter)
+	}
+
+	return value
+}
+
+func validateStripBinary(k *koanf.Koanf, name string, value string) string {
+
+	if k.Exists(name + ".strip_binary") {
+		value = valid.StripLow(string(value), true)
+		value = valid.Trim(value, "")
 	}
 
 	return value

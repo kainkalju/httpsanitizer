@@ -48,6 +48,7 @@ form_params:
     type: email
     maxlen: 200
     strip_chars: "'`/"
+    strip_binary: true
   ip:
     type: ip
   url:
