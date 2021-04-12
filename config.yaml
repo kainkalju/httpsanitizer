@@ -22,19 +22,27 @@ http_header_out:
     - Content-Length
     - Content-Type
     - Cache-Control
+http_cookie_in:
+  set:
+    Foo: bar
+  del:
+    - X-XSRF-TOKEN
+  # only:
+  #   - TEST
+  #   - Foo
 http_header_in:
   set:
     User-Agent: httpsanitizer/0.1
   del:
-    - X-Origin-Host
-  only:
-    - Host
-    - Accept
-    - User-Agent
-    - Content-Length
-    - Content-Type
-    - X-Forwarded-Host
-    - X-Origin-Host
+    - X-XSRF-TOKEN
+  # only:
+  #   - Host
+  #   - Accept
+  #   - User-Agent
+  #   - Content-Length
+  #   - Content-Type
+  #   - X-Forwarded-Host
+  #   - X-Origin-Host
 sanitize_http_headers:
   maxlen: 256
   strip_chars: "'`/"

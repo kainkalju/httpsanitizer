@@ -106,6 +106,7 @@ func main() {
 			sanitizingPOST(req, k)
 		}
 
+		sanitizingIncomingCookies(req, k)
 		req.Header.Add("X-Forwarded-Host", req.Host)
 		req.Header.Add("X-Origin-Host", origin.Host)
 		sanitizingIncomingHeaders(req, k)
@@ -240,6 +241,56 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 			value = validateStripSQLia(k, p, value)
 			// value = url.QueryEscape(value)
 			req.Header.Set(name, value)
+		}
+	}
+
+}
+
+func sanitizingIncomingCookies(req *http.Request, k *koanf.Koanf) {
+
+	if k.Exists("http_cookie_in.set") {
+		for _, name := range k.MapKeys("http_cookie_in.set") {
+			value := k.String("http_cookie_in.set." + name)
+			c := http.Cookie{}
+			c.Name = name
+			c.Value = value
+			req.AddCookie(&c)
+			log.Println("set cookie: ", name, value)
+		}
+	}
+
+	jar := req.Cookies()
+	req.Header.Del("Cookie")
+
+	if k.Exists("http_cookie_in.del") {
+		for _, name := range k.Strings("http_cookie_in.del") {
+			for _, c := range jar {
+				if name != c.Name {
+					req.AddCookie(c)
+				} else {
+					log.Println("remove cookie: ", c.Name)
+				}
+			}
+		}
+	}
+
+	jar = req.Cookies()
+	req.Header.Del("Cookie")
+
+	if k.Exists("http_cookie_in.only") {
+		var match bool
+		for _, c := range jar {
+			match = false
+			for _, name := range k.Strings("http_cookie_in.only") {
+				if name == c.Name {
+					match = true
+				}
+			}
+			if match == true {
+				req.AddCookie(c)
+			} else {
+				log.Println("remove cookie: ", c.Name)
+			}
 		}
 	}
 
