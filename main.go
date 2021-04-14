@@ -187,7 +187,7 @@ func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
 		for _, name := range k.MapKeys("http_header_out.set") {
 			value := k.String("http_header_out.set." + name)
 			res.Header.Set(name, value)
-			log.Println("set header: ", name, value)
+			// log.Println("set header: ", name, value)
 		}
 	}
 	if k.Exists("http_header_out.del") {
@@ -220,7 +220,7 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 		for _, name := range k.MapKeys("http_header_in.set") {
 			value := k.String("http_header_in.set." + name)
 			req.Header.Set(name, value)
-			log.Println("set header: ", name, value)
+			// log.Println("set header: ", name, value)
 		}
 	}
 	if k.Exists("http_header_in.del") {
