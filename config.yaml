@@ -45,8 +45,6 @@ http_header_in:
   #   - X-Origin-Host
 sanitize_http_headers:
   maxlen: 256
-  strip_chars: "'`/"
-  strip_quotation: true
   strip_binary: true
   strip_html: true
   strip_sqlia: true

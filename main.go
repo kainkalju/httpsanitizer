@@ -95,15 +95,21 @@ func main() {
 
 	reverseProxy.Director = func(req *http.Request) {
 
-		if req.Method == "HEAD" {
+		switch m := req.Method; m {
+		case "GET":
 			sanitizingGET(req, k)
-		}
-		if req.Method == "GET" {
-			sanitizingGET(req, k)
-		}
-		if req.Method == "POST" {
+		case "POST":
 			sanitizingGET(req, k)
 			sanitizingPOST(req, k)
+		case "HEAD":
+			sanitizingGET(req, k)
+		case "PUT":
+			sanitizingGET(req, k)
+			sanitizingPOST(req, k)
+		case "DELETE":
+			sanitizingGET(req, k)
+		default:
+			sanitizingGET(req, k)
 		}
 
 		sanitizingIncomingCookies(req, k)
@@ -125,6 +131,16 @@ func main() {
 		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
 	})
 	router.Handle("GET", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+		startTime := time.Now()
+		reverseProxy.ServeHTTP(w, r)
+		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
+	})
+	router.Handle("PUT", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+		startTime := time.Now()
+		reverseProxy.ServeHTTP(w, r)
+		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
+	})
+	router.Handle("DELETE", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		startTime := time.Now()
 		reverseProxy.ServeHTTP(w, r)
 		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
@@ -361,6 +377,9 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 	data := url.Values{}
 	req.ParseForm()
+	if len(req.PostForm) == 0 {
+		return
+	}
 	for name, values := range req.PostForm {
 		for _, value := range values {
 			p := "form_params." + name
