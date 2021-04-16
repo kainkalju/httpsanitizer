@@ -135,6 +135,17 @@ RUN apt-get update && apt-get install -y \
 
 RUN mkdir -p /var/www/gallery/
 COPY gallery /var/www/gallery/
+COPY gallery.conf etc/apache2/sites-available/
+ADD --chown=www-data:www-data apache2 /run/apache2
+ADD --chown=www-data:www-data apache2 /var/log/apache2
+ADD --chown=www-data:www-data apache2 /var/lock/apache2
+ENV APACHE_RUN_USER www-data
+ENV APACHE_RUN_GROUP www-data
+ENV APACHE_RUN_DIR /run/apache2
+ENV APACHE_LOCK_DIR /var/lock/apache2
+ENV APACHE_LOG_DIR /var/log/apache2
+ENV APACHE_PID_FILE /run/apache2/apache2.pid
+RUN a2ensite gallery
 
 COPY httpsanitizer /app/
 COPY config.yaml /app/
