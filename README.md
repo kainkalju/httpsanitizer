@@ -125,7 +125,7 @@ Similar configuration was successfully used in Locked Shields 2021 cyber defence
 
 ## Docker example
 
-Dokerfile
+### Dockerfile
 ```
 FROM ubuntu:bionic
 RUN apt-get update && apt-get install -y \
