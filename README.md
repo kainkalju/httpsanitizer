@@ -208,7 +208,7 @@ All other types are probably self explanatory. `text` will allow **strings** and
 
 `strip_html` will remove HTML tags from text
 
-`strip_sqlia` will try to mask SQL injection attempt with ***** marks to it cannot properly execute even attempt succeed to break SQL query into several queries in the web application
+`strip_sqlia` will try to mask SQL injection attempt with ***** marks so it cannot properly execute even attempt succeed to break SQL query into several queries in the web application
 
 ## Author
 
