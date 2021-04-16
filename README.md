@@ -135,6 +135,8 @@ RUN apt-get update && apt-get install -y \
 
 RUN mkdir -p /var/www/gallery/
 COPY gallery /var/www/gallery/
+
+COPY ports.conf /etc/apache2/
 COPY gallery.conf etc/apache2/sites-available/
 ADD --chown=www-data:www-data apache2 /run/apache2
 ADD --chown=www-data:www-data apache2 /var/log/apache2
