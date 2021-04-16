@@ -204,7 +204,7 @@ All other types are probably self explanatory. `text` will allow **strings** and
 
 `strip_quotation` will remove double quotation marks
 
-`strip_binary` will strip all character names outside of defined 8-bit letters like TAB, NUL, BEL, etc.
+`strip_binary` will strip all characters outside of defined 8-bit letters like TAB, NUL, BEL, etc.
 
 `strip_html` will remove HTML tags from text
 
