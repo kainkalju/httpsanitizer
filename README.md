@@ -160,7 +160,7 @@ $ docker run -it --rm --name gallery gallery-image:latest
 2021/04/16 22:22:01 Starting the httpsanitizer reverse proxy server
 ```
 
-and when running this container inside the container pricess list will look like:
+and inside the container process list will look like:
 ```
     1 pts/0    Ssl+   0:00 /root/httpsanitizer
    11 pts/0    S+     0:00 /usr/sbin/apache2 -D FOREGROUND
