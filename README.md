@@ -123,6 +123,43 @@ form_params:
 
 Similar configuration was successfully used in Locked Shields 2021 cyber defence exercise for protecting simple single-binary forum site inside the Docker container with no source available. This is exactly the case where it's more costly to fix the original site than trying to protect it from malicious requests.
 
+## Docker example
+
+Dokerfile
+```
+FROM ubuntu:bionic
+RUN apt-get update && apt-get install -y \
+    apache2 libapache2-mod-php7.2 php7.2-mysql php7.2-xml php7.2-bz2 php7.2-curl \
+    php7.2-dom php7.2-gd php7.2-mbstring php7.2-xml php7.2-xsl php7.2-zip \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN mkdir -p /var/www/gallery/
+COPY gallery /var/www/gallery/
+
+COPY httpsanitizer /app/
+COPY config.yaml /app/
+
+CMD ["/app/httpsanitizer"]
+```
+
+launching container:
+```
+$ docker run -it --rm --name gallery gallery-image:latest
+2021/04/16 22:22:01 Stated background process: /usr/sbin/apache2 -D FOREGROUND
+2021/04/16 22:22:01 Starting the httpsanitizer reverse proxy server
+```
+
+and when running this container inside the container pricess list will look like:
+```
+    1 pts/0    Ssl+   0:00 /root/httpsanitizer
+   11 pts/0    S+     0:00 /usr/sbin/apache2 -D FOREGROUND
+   13 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
+   14 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
+   15 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
+   16 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
+   17 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
+```
+
 ## Configuration params
 
 ### upstream
