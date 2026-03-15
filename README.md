@@ -1,16 +1,16 @@
 # httpsanitizer
 
-`httpsanitizer` is `SingleHostReverseProxy` for sanitizing HTTP header (in & out), HTTP Cookies and GET / POST request parameters. You can put it directly front of web application /webserver what you need to protect from malicious requests.
+`httpsanitizer` is a `SingleHostReverseProxy` for sanitizing HTTP headers (in & out), HTTP cookies, GET/POST request parameters, and JSON/XML request bodies. Put it directly in front of a web application or web server to protect it from malicious requests.
 
-`httpsanitizer` can run inside Docker container as process 1 and it can start web application or webserver (apache) as sub-process. It will pass all singals to sub-process also and will monitor and restart if sub-process exits (in case of crashing).
+`httpsanitizer` can run inside a Docker container as PID 1 and start the web application or web server (e.g. Apache) as a sub-process. It forwards all signals to the sub-process and will monitor and restart it if it exits or crashes.
 
-`httpsanitizer` will be transparent drop-in solution for protecting web applications that you cannot fix easily.
+`httpsanitizer` is a transparent drop-in solution for protecting web applications that cannot be easily modified or patched.
 
 ## Example config
 
-Config file is in YAML format and will be reloaded once it changes but unfortunately not all the parems could be changed runtime.
+The config file is in YAML format and is reloaded automatically when it changes on disk. Note that `upstream`, `server`, and `audit_log` are read only at startup and require a restart to take effect.
 
-```
+```yaml
 ---
 upstream:
   url: http://127.0.0.1:8081/
@@ -21,9 +21,12 @@ server:
   writeTimeout: 10
   idleTimeout: 20
   maxHeaderBytes: 4096
+  maxBodyBytes: 1048576        # 1 MB request body limit; 0 = no limit
+# audit_log: true              # structured JSON audit log → stdout
+# audit_log: /var/log/httpsanitizer.json
 http_header_out:
   set:
-    X-XSS_Protection: "1; mode=block"
+    X-XSS-Protection: "1; mode=block"
     X-Content-Type-Options: "nosniff"
     X-Permitted-Cross-Domain-Policies: "none"
     Content-Security-Policy: "default-src 'self'; child-src 'none'"
@@ -63,11 +66,19 @@ http_header_in:
     - X-Real-Ip
     - Referer
 sanitize_http_headers:
-#  maxlen: 256
-#  strip_quotation: true
+  maxlen: 256
   strip_binary: true
   strip_html: true
   strip_sqlia: true
+access_control:
+  allow:
+    - "10.0.0.0/8"
+    - "192.168.0.0/16"
+#  deny:
+#    - "203.0.113.0/24"
+# block_on_detect: true
+sanitize_json_body: true
+sanitize_xml_body: true
 sanitize_form_names:
   strip_chars: "'`/"
   strip_quotation: true
@@ -121,23 +132,23 @@ form_params:
     type: absent
 ```
 
-Similar configuration was successfully used in Locked Shields 2021 cyber defence exercise for protecting simple single-binary forum site inside the Docker container with no source available. This is exactly the case where it's more costly to fix the original site than trying to protect it from malicious requests.
+Similar configuration was successfully used in Locked Shields 2021 cyber defence exercise for protecting a simple single-binary forum site inside a Docker container with no source available — exactly the case where it is more costly to fix the original site than to protect it from malicious requests.
 
 ## Docker example
 
 ### Dockerfile
-```
+```dockerfile
 FROM ubuntu:bionic
 RUN apt-get update && apt-get install -y \
     apache2 libapache2-mod-php7.2 php7.2-mysql php7.2-xml php7.2-bz2 php7.2-curl \
-    php7.2-dom php7.2-gd php7.2-mbstring php7.2-xml php7.2-xsl php7.2-zip \
+    php7.2-dom php7.2-gd php7.2-mbstring php7.2-xml php7.2-xsl php7.2-zip && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 RUN mkdir -p /var/www/gallery/
 COPY gallery /var/www/gallery/
 
 COPY ports.conf /etc/apache2/
-COPY gallery.conf etc/apache2/sites-available/
+COPY gallery.conf /etc/apache2/sites-available/
 ADD --chown=www-data:www-data apache2 /run/apache2
 ADD --chown=www-data:www-data apache2 /var/log/apache2
 ADD --chown=www-data:www-data apache2 /var/lock/apache2
@@ -155,110 +166,182 @@ COPY config.yaml /app/
 CMD ["/app/httpsanitizer"]
 ```
 
-launching container:
+Launching the container:
 ```
 $ docker run -it --rm --name gallery gallery-image:latest
 2021/04/16 22:22:01 Stated background process: /usr/sbin/apache2 -D FOREGROUND
 2021/04/16 22:22:01 Starting the httpsanitizer reverse proxy server
 ```
 
-and inside the container process list will look like:
+Process list inside the container:
 ```
     1 pts/0    Ssl+   0:00 /root/httpsanitizer
    11 pts/0    S+     0:00 /usr/sbin/apache2 -D FOREGROUND
    13 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
    14 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
-   15 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
-   16 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
-   17 pts/0    S+     0:00  \_ /usr/sbin/apache2 -D FOREGROUND
 ```
 
-## Configuration params
+## Configuration reference
 
 ### upstream
 
-`url` defines host+port number of upstream web server in URL format - think proxy_pass and nginx
+`url` — host and port of the upstream web server in URL format (analogous to nginx `proxy_pass`).
 
-`exec` is optonal param for defining command line for sub-process what `httpsanitizer` needs to start and monitor
+`exec` — optional command line for a sub-process that `httpsanitizer` starts and monitors. The sub-process is restarted automatically if it exits.
 
 ### server
 
-params for [http.Server](https://golang.org/pkg/net/http/#Server)
+Standard `http.Server` parameters plus body size control.
 
+| key | default | description |
+|---|---|---|
+| `addr` | `:8080` | Listen address |
+| `readTimeout` | `10` | Read timeout in seconds |
+| `writeTimeout` | `10` | Write timeout in seconds |
+| `idleTimeout` | `20` | Idle (keep-alive) timeout in seconds |
+| `maxHeaderBytes` | `4096` | Maximum request header size in bytes |
+| `maxBodyBytes` | `0` | Maximum request body size in bytes; `0` = no limit. Oversized requests receive a 413. |
+
+### audit_log
+
+Enables structured JSON audit logging. Each request produces one JSON line containing the timestamp, client IP, method, host, path, response status, duration, and any sanitization events that fired. Payload values are never logged.
+
+```yaml
+audit_log: true                         # write to stdout
+audit_log: /var/log/httpsanitizer.json  # write to file (appended)
 ```
-server := &http.Server{
-	Addr:           serverAddr,
-	Handler:        router,
-	ReadTimeout:    serverReadTimeout * time.Second,
-	WriteTimeout:   serverWriteTimeout * time.Second,
-	IdleTimeout:    serverIdleTimeout * time.Second,
-	MaxHeaderBytes: serverMaxHeaderBytes,
-}
+
+Example audit log entry:
+```json
+{"ts":"2026-03-15T10:30:00.123Z","client_ip":"10.0.0.5","method":"POST","host":"example.com","path":"/login","status":200,"duration_ms":12,"events":[{"rule":"form_params","field":"username","location":"post"},{"rule":"sanitize_http_headers","field":"X-Custom","location":"header"}]}
+```
+
+When `block_on_detect` is enabled, blocked requests include `"blocked":true`. IP-denied requests include `"denied":true`.
+
+### access_control
+
+IP-based allowlist and blocklist. Accepts bare IP addresses and CIDR ranges. The deny list is evaluated first; a request that is not denied must then match the allow list (if configured) to proceed.
+
+```yaml
+access_control:
+  allow:
+    - "10.0.0.0/8"
+    - "192.168.0.0/16"
+    - "203.0.113.5"
+  deny:
+    - "10.99.0.0/24"
+```
+
+| scenario | behaviour |
+|---|---|
+| only `allow` configured | non-matching IPs receive 403 |
+| only `deny` configured | matching IPs receive 403; all others pass |
+| both configured | deny checked first, then allow |
+| neither configured | all IPs pass |
+
+Source IP is always taken from the direct TCP connection (`RemoteAddr`), not from `X-Forwarded-For`, which clients can forge.
+
+### block_on_detect
+
+When set to `true`, any request where a sanitizer modifies a value is blocked with a 403 response and the upstream never receives it. The default behaviour (sanitize and forward) is used when this key is absent.
+
+```yaml
+block_on_detect: true
 ```
 
 ### http_header_out
 
-params for filtering outgoing HTTP headers
+Filters applied to response headers before they are sent to the client.
 
-`set` will define new HTTP headers to add to request
+`set` — headers to add or override in the response.
 
-`del` will define HTTP header names what we should remove
+`del` — header names to remove from the response.
 
-`only` is whitelist for HTTP headers what we will pass through. Will also apply to params that have `set`
-
-### http_cookie_in
-
-params for filtering incoming HTTP Cookie
-
-`set` will define new Cookies to add to request
-
-`del` will define Cookie names what we should remove
-
-`only` is whitelist for Cookies what we will pass through. Will also apply to params that have `set`
+`only` — whitelist; only listed headers are forwarded to the client. Applied before `set`, so proxy-injected headers are never affected by the whitelist.
 
 ### http_header_in
 
-params for filtering incoming HTTP headers
+Filters applied to incoming request headers before forwarding to upstream.
 
-`set` will define new HTTP headers to add to request
+`set` — headers to add or override (e.g. force a specific `User-Agent`).
 
-`del` will define HTTP header names what we should remove
+`del` — header names to remove.
 
-`only` is whitelist for HTTP headers what we will pass through. Will also apply to params that have `set`
+`only` — whitelist; only listed headers are forwarded to upstream.
+
+### http_cookie_in
+
+Filters applied to incoming cookies before forwarding to upstream.
+
+`set` — cookies to add or override.
+
+`del` — cookie names to remove.
+
+`only` — whitelist; only listed cookies are forwarded to upstream.
 
 ### sanitize_http_headers
 
-applies filters to incoming HTTP header values. Similar validator filtering than we are doing for request params
+Applies content filters to all incoming request header values.
+
+| key | description |
+|---|---|
+| `maxlen` | Truncate header values longer than this |
+| `strip_chars` | Remove specific characters |
+| `strip_quotation` | Remove double-quote characters |
+| `strip_binary` | Strip control/binary characters (NUL, BEL, TAB, etc.) |
+| `strip_html` | Remove HTML tags |
+| `strip_sqlia` | Mask SQL keywords (SELECT, INSERT, DROP, …) with `xxxxxx` |
+
+### sanitize_json_body
+
+When set to `true`, parses `application/json` request bodies and applies `form_params` rules to every string value. Object field names are used as the `form_params` lookup key; `_defaults_` applies to any field not explicitly listed. Non-string values (numbers, booleans, null) pass through unchanged.
+
+```yaml
+sanitize_json_body: true
+```
+
+### sanitize_xml_body
+
+When set to `true`, parses `text/xml` and `application/xml` request bodies and applies `form_params` rules to all character data and attribute values. The enclosing element name is used as the `form_params` lookup key.
+
+```yaml
+sanitize_xml_body: true
+```
 
 ### sanitize_form_names
 
-applies filters to incoming request param names. Similar validator filtering than we are doing for request params (values)
+Applies content filters to incoming request parameter *names* (not values). Same filter keys as `sanitize_http_headers`.
 
 ### form_params
 
-applies filters to GET and/or POST request params (values)
+Applies type validation and content filters to GET query parameters and POST form body values. For JSON and XML bodies, field names are matched against these rules when `sanitize_json_body` or `sanitize_xml_body` is enabled.
 
-first level key is the param name like `text`, `num`, `malicious`, etc. in the example below. And optional `_default_` applies to those form params where we haven't defined explicitly.
+The top-level key is the parameter name (e.g. `email`, `num`). The special key `_defaults_` applies to any parameter not explicitly listed.
 
-`type` defines param type. Possible values are `text`, `numeric`, `email`, `ip`, `url`, `path`, `filename`, `unixtime` and `absent`
+#### type
 
-`absent` is special type which basically means remove it.
+| type | behaviour |
+|---|---|
+| `text` | String with configurable filters (see filter keys below) |
+| `numeric` | Allows only digits, `.` and `,`; everything else is stripped |
+| `email` | Validates as a properly formatted e-mail address; invalid → empty string |
+| `ip` | Validates as IPv4 or IPv6 address; invalid → empty string |
+| `url` | Validates as a full URL; invalid → empty string |
+| `path` | Validates as a URI path; invalid → empty string |
+| `filename` | Strips path traversal sequences (`../../`); sanitises to a safe filename |
+| `unixtime` | Validates as a Unix timestamp integer; invalid → empty string |
+| `absent` | Parameter is always removed from the forwarded request |
 
-All other types are probably self explanatory. `text` will allow **strings** and `numeric` will allow only 0-9 and .,
+#### filter keys (for `text` type)
 
-`email` is trying to validate properly formatted e-mail address and `ip` will validate ipv4 & ipv6 addresses. `filename` will strip down typical ../../../../ path attack.
-
-#### filter names
-
-`strip_chars` allows to define specific characters that will be striped from the param value.
-
-`strip_quotation` will remove double quotation marks
-
-`strip_binary` will strip all characters outside of defined 8-bit letters like TAB, NUL, BEL, etc.
-
-`strip_html` will remove HTML tags from text
-
-`strip_sqlia` will try to mask SQL injection attempt with ***** marks so it cannot properly execute even attempt succeed to break SQL query into several queries in the web application
+| key | description |
+|---|---|
+| `maxlen` | Truncate values longer than this number of bytes |
+| `strip_chars` | Remove the listed characters from values |
+| `strip_quotation` | Remove double-quote characters |
+| `strip_binary` | Strip control/binary characters |
+| `strip_html` | Remove HTML tags |
+| `strip_sqlia` | Mask SQL keywords with `xxxxxx` |
 
 ## Author
 
