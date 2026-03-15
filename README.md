@@ -349,4 +349,4 @@ Kain Kalju
 
 ## License
 
-MIT Licensed. See the LICENSE file for details.
+MIT Licensed. See the [LICENSE](LICENSE) file for details.
