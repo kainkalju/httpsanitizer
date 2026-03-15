@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -23,6 +25,13 @@ import (
 var k = koanf.New(".")
 
 func main() {
+	configFile := flag.String("config", "config.yaml", "path to the YAML configuration file")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\nOptions:\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
 	var execCmd string = ""
 	var upstreamURL = "http://127.0.0.1:9000/"
 	var serverAddr string = ":8080"
@@ -32,7 +41,7 @@ func main() {
 	var serverMaxHeaderBytes int = 4096
 
 	// Load YAML config.
-	cfg := file.Provider("config.yaml")
+	cfg := file.Provider(*configFile)
 	if err := k.Load(cfg, yaml.Parser()); err != nil {
 		log.Fatalf("error loading config: %v", err)
 	}
