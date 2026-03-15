@@ -187,11 +187,18 @@ func execProgram(execCmd string) *exec.Cmd {
 
 func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
 
-	if k.Exists("http_header_out.set") {
-		for _, name := range k.MapKeys("http_header_out.set") {
-			value := k.String("http_header_out.set." + name)
-			res.Header.Set(name, value)
-			// log.Println("set header: ", name, value)
+	// Apply only/del first to filter upstream headers, then set proxy-injected
+	// headers last so they are never subject to the upstream allowlist.
+	if k.Exists("http_header_out.only") {
+		onlySet := make(map[string]bool)
+		for _, name := range k.Strings("http_header_out.only") {
+			onlySet[name] = true
+		}
+		for n := range res.Header {
+			if !onlySet[n] {
+				res.Header.Del(n)
+				log.Println("remove header: ", n)
+			}
 		}
 	}
 	if k.Exists("http_header_out.del") {
@@ -200,19 +207,10 @@ func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
 			log.Println("remove header: ", name)
 		}
 	}
-	if k.Exists("http_header_out.only") {
-		var match bool
-		for n := range res.Header {
-			match = false
-			for _, name := range k.Strings("http_header_out.only") {
-				if name == n {
-					match = true
-				}
-			}
-			if match == false {
-				res.Header.Del(n)
-				log.Println("remove header: ", n)
-			}
+	if k.Exists("http_header_out.set") {
+		for _, name := range k.MapKeys("http_header_out.set") {
+			value := k.String("http_header_out.set." + name)
+			res.Header.Set(name, value)
 		}
 	}
 

@@ -10,10 +10,10 @@ server:
   maxHeaderBytes: 4096
 http_header_out:
   set:
-    X-XSS_Protection: "1; mode=block"
-    X-Content-Type-Options: "nosniff"
-    X-Permitted-Cross-Domain-Policies: "none"
-    Content-Security-Policy: "default-src 'self'; child-src 'none'"
+    "X-XSS-Protection": "1; mode=block"
+    "X-Content-Type-Options": "nosniff"
+    "X-Permitted-Cross-Domain-Policies": "none"
+    "Content-Security-Policy": "default-src 'self'; child-src 'none'"
   del:
     - Cache-Control
   only:
@@ -32,7 +32,7 @@ http_cookie_in:
   #   - Foo
 http_header_in:
   set:
-    User-Agent: httpsanitizer/0.1
+    "User-Agent": "httpsanitizer/0.1"
   del:
     - X-XSRF-TOKEN
   # only:
