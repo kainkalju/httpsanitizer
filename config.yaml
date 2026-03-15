@@ -48,6 +48,13 @@ sanitize_http_headers:
   strip_binary: true
   strip_html: true
   strip_sqlia: true
+# access_control:
+#   allow:
+#     - "10.0.0.0/8"
+#     - "192.168.0.0/16"
+#   deny:
+#     - "203.0.113.0/24"
+#     - "198.51.100.42"
 # block_on_detect: true   # return 403 and drop request when a sanitizer fires (default: sanitize and forward)
 sanitize_json_body: true
 sanitize_xml_body: true

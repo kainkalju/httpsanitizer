@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -188,6 +189,12 @@ func main() {
 	// can coordinate without changing the reverseProxy API.
 	handle := func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		startTime := time.Now()
+		if !checkIPAccess(r.RemoteAddr, k) {
+			log.Printf("ACCESS DENIED: %s %s %s%s", r.RemoteAddr, r.Method, r.Host, r.RequestURI)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
+			return
+		}
 		if k.Bool("block_on_detect") {
 			r = r.WithContext(context.WithValue(r.Context(), blockKey{}, &blockFlag{}))
 		}
@@ -227,6 +234,64 @@ func execProgram(execCmd string) *exec.Cmd {
 	log.Println("Stated background process:", execCmd)
 
 	return cmd
+}
+
+// checkIPAccess returns true if the remote address is permitted by the
+// access_control config. Deny rules are evaluated before allow rules.
+//
+//   - If only access_control.deny is set: block matching IPs, allow the rest.
+//   - If only access_control.allow is set: allow matching IPs, block the rest.
+//   - If both are set: deny-list is checked first; an IP that is not denied must
+//     still appear in the allow-list to pass.
+//   - If neither is set: all IPs are allowed.
+func checkIPAccess(remoteAddr string, k *koanf.Koanf) bool {
+	hasDeny := k.Exists("access_control.deny")
+	hasAllow := k.Exists("access_control.allow")
+	if !hasDeny && !hasAllow {
+		return true
+	}
+
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		log.Printf("access_control: cannot parse remote IP %q; denying", remoteAddr)
+		return false
+	}
+
+	if hasDeny {
+		for _, entry := range k.Strings("access_control.deny") {
+			if matchesCIDR(ip, entry) {
+				return false
+			}
+		}
+	}
+
+	if hasAllow {
+		for _, entry := range k.Strings("access_control.allow") {
+			if matchesCIDR(ip, entry) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return true
+}
+
+// matchesCIDR reports whether ip falls within the given CIDR range or equals
+// the given bare IP address.
+func matchesCIDR(ip net.IP, entry string) bool {
+	if _, network, err := net.ParseCIDR(entry); err == nil {
+		return network.Contains(ip)
+	}
+	if other := net.ParseIP(entry); other != nil {
+		return ip.Equal(other)
+	}
+	log.Printf("access_control: invalid CIDR/IP %q in config; skipping", entry)
+	return false
 }
 
 func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
