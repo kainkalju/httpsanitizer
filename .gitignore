@@ -1,0 +1,15 @@
+SECURITY_REPORT.md
+
+# Binary
+httpsanitizer
+main
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+.hidden/
+*.swp
+*~

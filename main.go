@@ -81,6 +81,8 @@ func main() {
 			for {
 				cmd.Wait()
 				log.Println("WARN: background process exited.")
+				// Fix #5: sleep before restarting to prevent tight CPU-exhausting loop
+				time.Sleep(2 * time.Second)
 				// try to start again
 				cmd = execProgram(execCmd)
 			}
@@ -92,22 +94,17 @@ func main() {
 	path := "/*catchall"
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(origin)
+	// Fix #7: capture default director to preserve hop-by-hop header stripping and X-Forwarded-For handling
+	defaultDirector := reverseProxy.Director
 
 	reverseProxy.Director = func(req *http.Request) {
+		// Call default director first: strips hop-by-hop headers, sets X-Forwarded-For, sets URL scheme/host
+		defaultDirector(req)
 
 		switch m := req.Method; m {
-		case "GET":
-			sanitizingGET(req, k)
-		case "POST":
+		case "POST", "PUT":
 			sanitizingGET(req, k)
 			sanitizingPOST(req, k)
-		case "HEAD":
-			sanitizingGET(req, k)
-		case "PUT":
-			sanitizingGET(req, k)
-			sanitizingPOST(req, k)
-		case "DELETE":
-			sanitizingGET(req, k)
 		default:
 			sanitizingGET(req, k)
 		}
@@ -116,8 +113,6 @@ func main() {
 		req.Header.Add("X-Forwarded-Host", req.Host)
 		req.Header.Add("X-Origin-Host", origin.Host)
 		sanitizingIncomingHeaders(req, k)
-		req.URL.Scheme = origin.Scheme
-		req.URL.Host = origin.Host
 	}
 
 	reverseProxy.ModifyResponse = func(res *http.Response) error {
@@ -246,17 +241,21 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 	}
 	if k.Exists("sanitize_http_headers") {
 		p := "sanitize_http_headers"
-		for name := range req.Header {
-			value := req.Header.Get(name)
-			value, _ = url.QueryUnescape(value)
-			value = validateMaxLen(k, p, value)
-			value = validateStripChars(k, p, value)
-			value = validateStripQuotation(k, p, value)
-			value = validateStripBinary(k, p, value)
-			value = validateStripHTML(k, p, value)
-			value = validateStripSQLia(k, p, value)
-			// value = url.QueryEscape(value)
-			req.Header.Set(name, value)
+		// Fix #4: removed url.QueryUnescape — HTTP headers are not URL-encoded;
+		// unescaping caused invalid % sequences (e.g. "100% genuine") to wipe the header.
+		// Fix #6: iterate all values per header name instead of Get/Set (which truncates multi-value headers).
+		for name, values := range req.Header {
+			sanitized := make([]string, 0, len(values))
+			for _, value := range values {
+				value = validateMaxLen(k, p, value)
+				value = validateStripChars(k, p, value)
+				value = validateStripQuotation(k, p, value)
+				value = validateStripBinary(k, p, value)
+				value = validateStripHTML(k, p, value)
+				value = validateStripSQLia(k, p, value)
+				sanitized = append(sanitized, value)
+			}
+			req.Header[name] = sanitized
 		}
 	}
 
@@ -279,13 +278,17 @@ func sanitizingIncomingCookies(req *http.Request, k *koanf.Koanf) {
 	req.Header.Del("Cookie")
 
 	if k.Exists("http_cookie_in.del") {
+		// Fix #1: build a delete-set first, then do a single pass over the jar.
+		// The old nested loop re-added "deleted" cookies on every subsequent iteration.
+		delSet := make(map[string]bool)
 		for _, name := range k.Strings("http_cookie_in.del") {
-			for _, c := range jar {
-				if name != c.Name {
-					req.AddCookie(c)
-				} else {
-					log.Println("remove cookie: ", c.Name)
-				}
+			delSet[name] = true
+		}
+		for _, c := range jar {
+			if delSet[c.Name] {
+				log.Println("remove cookie: ", c.Name)
+			} else {
+				req.AddCookie(c)
 			}
 		}
 	}
@@ -375,6 +378,20 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 }
 
 func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
+	// Fix #2: only process application/x-www-form-urlencoded bodies.
+	// For any other Content-Type (multipart/form-data, application/json, etc.),
+	// ParseForm silently does nothing, then the original body would be forwarded unsanitized.
+	// If form_params rules are configured, discard non-urlencoded bodies entirely.
+	ct := req.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.TrimSpace(ct), "application/x-www-form-urlencoded") {
+		if k.Exists("form_params") {
+			log.Printf("sanitizingPOST: unsupported Content-Type %q; discarding body to enforce form_params rules", ct)
+			req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
+			req.ContentLength = 0
+		}
+		return
+	}
+
 	data := url.Values{}
 	req.ParseForm()
 	if len(req.PostForm) == 0 {
@@ -501,43 +518,42 @@ func validateStripHTML(k *koanf.Koanf, name string, value string) string {
 }
 
 func validateStripSQLia(k *koanf.Koanf, name string, value string) string {
-	var match bool
-
 	if k.Exists(name + ".strip_sqlia") {
-		match = false
+		// Fix #3: detect individual dangerous SQL keywords — no longer requiring keyword pairs
+		// (old logic missed UNION SELECT, DELETE without FROM, bare DROP, etc.).
+		// Keywords are matched as whole words to reduce false positives.
 		s := strings.ToUpper(value)
-		if strings.Contains(s, "SELECT") {
-			if strings.Contains(s, "FROM") {
-				match = true
-			}
+		dangerous := []string{
+			"SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE",
+			"RENAME", "UNION", "EXEC", "EXECUTE", "DECLARE", "WAITFOR",
 		}
-		if strings.Contains(s, "UPDATE") {
-			if strings.Contains(s, "SET") {
-				match = true
+		match := false
+		for _, kw := range dangerous {
+			idx := strings.Index(s, kw)
+			if idx < 0 {
+				continue
 			}
-		}
-		if strings.Contains(s, "INSERT") {
-			if strings.Contains(s, "INTO") {
+			// Verify it is a whole word (not embedded inside another identifier)
+			before := idx == 0 || !isAlphaNum(rune(s[idx-1]))
+			after := idx+len(kw) >= len(s) || !isAlphaNum(rune(s[idx+len(kw)]))
+			if before && after {
 				match = true
-			}
-		}
-		if strings.Contains(s, "DELETE") {
-			if strings.Contains(s, "FROM") {
-				match = true
-			}
-		}
-		if strings.Contains(s, "DROP") || strings.Contains(s, "TRUNCATE") || strings.Contains(s, "RENAME") {
-			if strings.Contains(s, "TABLE") {
-				match = true
+				break
 			}
 		}
 		if match {
 			log.Printf("strip_sqlia matches: %v", value)
-			value = valid.ReplacePattern(value, "(?i)(update|select|insert|delete|drop|truncate|rename)", "xxxxxx")
+			value = valid.ReplacePattern(value,
+				`(?i)\b(select|insert|update|delete|drop|truncate|rename|union|exec|execute|declare|waitfor)\b`,
+				"xxxxxx")
 		}
 	}
 
 	return value
+}
+
+func isAlphaNum(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
 }
 
 func validateNumeric(value string) string {
