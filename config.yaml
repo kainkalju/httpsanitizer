@@ -1,6 +1,6 @@
 ---
 upstream:
-  url: http://www.flycom.ee/
+  url: http://127.0.0.1:9000/
 #  exec: ./sleep.sh 60
 server:
   addr: ":8080"
@@ -9,6 +9,8 @@ server:
   idleTimeout: 20
   maxHeaderBytes: 4096
   maxBodyBytes: 1048576   # 1 MB; 0 = no limit
+# audit_log: true                        # structured JSON audit log → stdout
+# audit_log: /var/log/httpsanitizer.json # structured JSON audit log → file
 http_header_out:
   set:
     "X-XSS-Protection": "1; mode=block"
@@ -51,6 +53,7 @@ sanitize_http_headers:
   strip_sqlia: true
 # access_control:
 #   allow:
+#     - "0.0.0.0"
 #     - "10.0.0.0/8"
 #     - "192.168.0.0/16"
 #   deny:

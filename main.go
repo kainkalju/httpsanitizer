@@ -29,6 +29,53 @@ import (
 // Global koanf instance. Use "." as the key path delimiter. This can be "/" or any character.
 var k = koanf.New(".")
 
+// auditLogger is the structured JSON audit log writer. nil = audit logging disabled.
+var auditLogger *log.Logger
+
+// auditKey is the context key for the per-request audit event accumulator.
+type auditKey struct{}
+
+// auditEvent records a single sanitization detection without including the payload value.
+type auditEvent struct {
+	Rule     string `json:"rule"`
+	Field    string `json:"field,omitempty"`
+	Location string `json:"location"` // "query", "post", "body", "header", "ip"
+}
+
+// auditLog accumulates sanitization events during a single request.
+type auditLog struct {
+	events []auditEvent
+}
+
+func (a *auditLog) add(rule, field, location string) {
+	a.events = append(a.events, auditEvent{Rule: rule, Field: field, Location: location})
+}
+
+// auditWriter wraps http.ResponseWriter to capture the response status code so it
+// can be included in the audit log entry written after ServeHTTP returns.
+type auditWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *auditWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *auditWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *auditWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // blockKey is the context key used to carry a blockFlag through the request pipeline.
 type blockKey struct{}
 
@@ -114,6 +161,23 @@ func main() {
 	if k.Exists("server.maxHeaderBytes") {
 		serverMaxHeaderBytes = k.Int("server.maxHeaderBytes")
 	}
+	// Initialize audit logger (once at startup; hot-reload does not change the destination).
+	if k.Exists("audit_log") {
+		dest := k.String("audit_log")
+		var w io.Writer
+		if dest == "true" || dest == "stdout" {
+			w = os.Stdout
+		} else {
+			f, err := os.OpenFile(dest, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				log.Fatalf("audit_log: cannot open %q: %v", dest, err)
+			}
+			w = f
+		}
+		auditLogger = log.New(w, "", 0)
+		log.Printf("audit logging enabled → %s", dest)
+	}
+
 	// Watch the file and get a callback on change. The callback can do whatever,
 	// like re-load the configuration.
 	// File provider always returns a nil `event`.
@@ -184,14 +248,19 @@ func main() {
 		return nil
 	}
 
-	// Single handler shared by all methods. Injects a blockFlag into the request
-	// context when block_on_detect is enabled so the Director and blockingTransport
-	// can coordinate without changing the reverseProxy API.
+	// Single handler shared by all methods. Wraps the ResponseWriter to capture
+	// the status code, injects audit/block context values, and writes a structured
+	// audit log entry on every exit path.
 	handle := func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		startTime := time.Now()
+		aw := &auditWriter{ResponseWriter: w}
+
 		if !checkIPAccess(r.RemoteAddr, k) {
 			log.Printf("ACCESS DENIED: %s %s %s%s", r.RemoteAddr, r.Method, r.Host, r.RequestURI)
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			http.Error(aw, "Forbidden", http.StatusForbidden)
+			al := &auditLog{}
+			al.add("access_control", "", "ip")
+			writeAuditLog(r, aw.status, time.Since(startTime), al, true, false)
 			log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
 			return
 		}
@@ -199,17 +268,32 @@ func main() {
 			body, err := ioutil.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 			if err != nil {
 				log.Printf("REQUEST TOO LARGE: %s %s %s%s", r.RemoteAddr, r.Method, r.Host, r.RequestURI)
-				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				http.Error(aw, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				al := &auditLog{}
+				al.add("max_body_bytes", "", "body")
+				writeAuditLog(r, aw.status, time.Since(startTime), al, false, false)
 				log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
 				return
 			}
 			r.Body = ioutil.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 		}
-		if k.Bool("block_on_detect") {
-			r = r.WithContext(context.WithValue(r.Context(), blockKey{}, &blockFlag{}))
+
+		ctx := r.Context()
+		var al *auditLog
+		if auditLogger != nil {
+			al = &auditLog{}
+			ctx = context.WithValue(ctx, auditKey{}, al)
 		}
-		reverseProxy.ServeHTTP(w, r)
+		if k.Bool("block_on_detect") {
+			ctx = context.WithValue(ctx, blockKey{}, &blockFlag{})
+		}
+		r = r.WithContext(ctx)
+
+		reverseProxy.ServeHTTP(aw, r)
+
+		bf, _ := r.Context().Value(blockKey{}).(*blockFlag)
+		writeAuditLog(r, aw.status, time.Since(startTime), al, false, bf != nil && bf.triggered)
 		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
 	}
 
@@ -245,6 +329,54 @@ func execProgram(execCmd string) *exec.Cmd {
 	log.Println("Stated background process:", execCmd)
 
 	return cmd
+}
+
+// writeAuditLog emits a single JSON-lines audit entry to auditLogger.
+// No-op when auditLogger is nil. Payload values are never included.
+func writeAuditLog(r *http.Request, status int, duration time.Duration, al *auditLog, denied bool, blocked bool) {
+	if auditLogger == nil {
+		return
+	}
+	if status == 0 {
+		status = http.StatusOK
+	}
+	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		clientIP = r.RemoteAddr
+	}
+	var events []auditEvent
+	if al != nil {
+		events = al.events
+	}
+	entry := struct {
+		Timestamp  string       `json:"ts"`
+		ClientIP   string       `json:"client_ip"`
+		Method     string       `json:"method"`
+		Host       string       `json:"host"`
+		Path       string       `json:"path"`
+		Status     int          `json:"status"`
+		DurationMs int64        `json:"duration_ms"`
+		Denied     bool         `json:"denied,omitempty"`
+		Blocked    bool         `json:"blocked,omitempty"`
+		Events     []auditEvent `json:"events,omitempty"`
+	}{
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+		ClientIP:   clientIP,
+		Method:     r.Method,
+		Host:       r.Host,
+		Path:       r.URL.RequestURI(),
+		Status:     status,
+		DurationMs: duration.Milliseconds(),
+		Denied:     denied,
+		Blocked:    blocked,
+		Events:     events,
+	}
+	b, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("audit log marshal error: %v", err)
+		return
+	}
+	auditLogger.Println(string(b))
 }
 
 // checkIPAccess returns true if the remote address is permitted by the
@@ -368,6 +500,7 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf, flag *blockFla
 	}
 	if k.Exists("sanitize_http_headers") {
 		p := "sanitize_http_headers"
+		al, _ := req.Context().Value(auditKey{}).(*auditLog)
 		// Fix #4: removed url.QueryUnescape — HTTP headers are not URL-encoded;
 		// unescaping caused invalid % sequences (e.g. "100% genuine") to wipe the header.
 		// Fix #6: iterate all values per header name instead of Get/Set (which truncates multi-value headers).
@@ -381,8 +514,13 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf, flag *blockFla
 				value = validateStripBinary(k, p, value)
 				value = validateStripHTML(k, p, value)
 				value = validateStripSQLia(k, p, value)
-				if flag != nil && value != original {
-					flag.trigger(fmt.Sprintf("header %q violated sanitize_http_headers policy", name))
+				if value != original {
+					if flag != nil {
+						flag.trigger(fmt.Sprintf("header %q violated sanitize_http_headers policy", name))
+					}
+					if al != nil {
+						al.add("sanitize_http_headers", name, "header")
+					}
 				}
 				sanitized = append(sanitized, value)
 			}
@@ -457,6 +595,7 @@ func sanitizingIncomingCookies(req *http.Request, k *koanf.Koanf) {
 }
 
 func sanitizingGET(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
+	al, _ := req.Context().Value(auditKey{}).(*auditLog)
 	data := url.Values{}
 	for name, values := range req.URL.Query() {
 		for _, value := range values {
@@ -507,8 +646,13 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 					value = ""
 				default:
 				}
-				if flag != nil && value != original {
-					flag.trigger(fmt.Sprintf("query param %q violated form_params policy", name))
+				if value != original {
+					if flag != nil {
+						flag.trigger(fmt.Sprintf("query param %q violated form_params policy", name))
+					}
+					if al != nil {
+						al.add("form_params", name, "query")
+					}
 				}
 			}
 			if k.Exists("sanitize_form_names") {
@@ -522,6 +666,7 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 }
 
 func sanitizingPOST(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
+	al, _ := req.Context().Value(auditKey{}).(*auditLog)
 	// Fix #2: only process application/x-www-form-urlencoded bodies.
 	// For any other Content-Type (multipart/form-data, application/json, etc.),
 	// ParseForm silently does nothing, then the original body would be forwarded unsanitized.
@@ -597,8 +742,13 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 					value = ""
 				default:
 				}
-				if flag != nil && value != original {
-					flag.trigger(fmt.Sprintf("POST param %q violated form_params policy", name))
+				if value != original {
+					if flag != nil {
+						flag.trigger(fmt.Sprintf("POST param %q violated form_params policy", name))
+					}
+					if al != nil {
+						al.add("form_params", name, "post")
+					}
 				}
 			}
 			if k.Exists("sanitize_form_names") {
@@ -615,8 +765,8 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 
 // sanitizeBodyField applies form_params rules for a named field.
 // Falls back to _defaults_ when no per-field rule exists.
-// flag may be nil; when non-nil a detected violation triggers a block.
-func sanitizeBodyField(k *koanf.Koanf, fieldName string, value string, flag *blockFlag) string {
+// flag and al may be nil; when non-nil they record violations for blocking and audit logging.
+func sanitizeBodyField(k *koanf.Koanf, fieldName string, value string, flag *blockFlag, al *auditLog) string {
 	p := "form_params." + fieldName
 	if !k.Exists(p) {
 		if k.Exists("form_params._defaults_") {
@@ -664,8 +814,13 @@ func sanitizeBodyField(k *koanf.Koanf, fieldName string, value string, flag *blo
 	case "absent":
 		value = ""
 	}
-	if flag != nil && value != original {
-		flag.trigger(fmt.Sprintf("body field %q violated form_params policy", fieldName))
+	if value != original {
+		if flag != nil {
+			flag.trigger(fmt.Sprintf("body field %q violated form_params policy", fieldName))
+		}
+		if al != nil {
+			al.add("form_params", fieldName, "body")
+		}
 	}
 	return value
 }
@@ -698,7 +853,8 @@ func sanitizingJSONBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 		return
 	}
 
-	data = sanitizeJSONNode(k, "", data, flag)
+	al, _ := req.Context().Value(auditKey{}).(*auditLog)
+	data = sanitizeJSONNode(k, "", data, flag, al)
 
 	sanitized, err := json.Marshal(data)
 	if err != nil {
@@ -715,18 +871,18 @@ func sanitizingJSONBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 // sanitizeJSONNode recursively walks a decoded JSON value and sanitizes all strings.
 // Object keys are used as field names for form_params lookup.
 // Array items inherit the field name of their parent array.
-func sanitizeJSONNode(k *koanf.Koanf, key string, val interface{}, flag *blockFlag) interface{} {
+func sanitizeJSONNode(k *koanf.Koanf, key string, val interface{}, flag *blockFlag, al *auditLog) interface{} {
 	switch v := val.(type) {
 	case string:
-		return sanitizeBodyField(k, key, v, flag)
+		return sanitizeBodyField(k, key, v, flag, al)
 	case map[string]interface{}:
 		for field, child := range v {
-			v[field] = sanitizeJSONNode(k, field, child, flag)
+			v[field] = sanitizeJSONNode(k, field, child, flag, al)
 		}
 		return v
 	case []interface{}:
 		for i, item := range v {
-			v[i] = sanitizeJSONNode(k, key, item, flag)
+			v[i] = sanitizeJSONNode(k, key, item, flag, al)
 		}
 		return v
 	default:
@@ -756,6 +912,7 @@ func sanitizingXMLBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 		return
 	}
 
+	al, _ := req.Context().Value(auditKey{}).(*auditLog)
 	decoder := xml.NewDecoder(bytes.NewReader(body))
 	var buf bytes.Buffer
 	encoder := xml.NewEncoder(&buf)
@@ -777,7 +934,7 @@ func sanitizingXMLBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 		case xml.StartElement:
 			elementStack = append(elementStack, t.Name.Local)
 			for i, attr := range t.Attr {
-				t.Attr[i].Value = sanitizeBodyField(k, attr.Name.Local, attr.Value, flag)
+				t.Attr[i].Value = sanitizeBodyField(k, attr.Name.Local, attr.Value, flag, al)
 			}
 			encoder.EncodeToken(t)
 		case xml.EndElement:
@@ -793,7 +950,7 @@ func sanitizingXMLBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 			// Copy: the underlying byte slice is reused across Token() calls.
 			data := make(xml.CharData, len(t))
 			copy(data, t)
-			sanitized := sanitizeBodyField(k, currentElement, string(data), flag)
+			sanitized := sanitizeBodyField(k, currentElement, string(data), flag, al)
 			encoder.EncodeToken(xml.CharData(sanitized))
 		default:
 			encoder.EncodeToken(tok)
