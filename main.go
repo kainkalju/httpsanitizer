@@ -546,15 +546,29 @@ func validateStripSQLia(k *koanf.Koanf, name string, value string) string {
 		}
 		match := false
 		for _, kw := range dangerous {
-			idx := strings.Index(s, kw)
-			if idx < 0 {
-				continue
+			offset := 0
+			// Loop to check all occurrences of the keyword
+			for {
+				idx := strings.Index(s[offset:], kw)
+				if idx < 0 {
+					break // No more occurrences in this keyword
+				}
+				realIdx := offset + idx
+				
+				// Verify it is a whole word (not embedded inside another identifier)
+				before := realIdx == 0 || !isAlphaNum(rune(s[realIdx-1]))
+				after := realIdx+len(kw) >= len(s) || !isAlphaNum(rune(s[realIdx+len(kw)]))
+				
+				if before && after {
+					match = true
+					break
+				}
+				
+				// Move past this occurrence
+				offset = realIdx + len(kw)
 			}
-			// Verify it is a whole word (not embedded inside another identifier)
-			before := idx == 0 || !isAlphaNum(rune(s[idx-1]))
-			after := idx+len(kw) >= len(s) || !isAlphaNum(rune(s[idx+len(kw)]))
-			if before && after {
-				match = true
+			
+			if match {
 				break
 			}
 		}
