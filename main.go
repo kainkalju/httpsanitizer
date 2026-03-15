@@ -195,6 +195,17 @@ func main() {
 			log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
 			return
 		}
+		if maxBodyBytes := int64(k.Int("server.maxBodyBytes")); maxBodyBytes > 0 && r.Body != nil {
+			body, err := ioutil.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+			if err != nil {
+				log.Printf("REQUEST TOO LARGE: %s %s %s%s", r.RemoteAddr, r.Method, r.Host, r.RequestURI)
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+				log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
+				return
+			}
+			r.Body = ioutil.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+		}
 		if k.Bool("block_on_detect") {
 			r = r.WithContext(context.WithValue(r.Context(), blockKey{}, &blockFlag{}))
 		}

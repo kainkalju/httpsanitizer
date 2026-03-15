@@ -8,6 +8,7 @@ server:
   writeTimeout: 10
   idleTimeout: 20
   maxHeaderBytes: 4096
+  maxBodyBytes: 1048576   # 1 MB; 0 = no limit
 http_header_out:
   set:
     "X-XSS-Protection": "1; mode=block"
