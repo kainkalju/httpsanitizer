@@ -272,54 +272,64 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 
 func sanitizingIncomingCookies(req *http.Request, k *koanf.Koanf) {
 
+	// Work on a slice so set/del/only transformations compose correctly
+	// without intermediate header clear/restore cycles losing cookies.
+	cookies := req.Cookies()
+
 	if k.Exists("http_cookie_in.set") {
+		// Build index for O(1) override detection
+		idx := make(map[string]int, len(cookies))
+		for i, c := range cookies {
+			idx[c.Name] = i
+		}
 		for _, name := range k.MapKeys("http_cookie_in.set") {
 			value := k.String("http_cookie_in.set." + name)
-			c := http.Cookie{}
-			c.Name = name
-			c.Value = value
-			req.AddCookie(&c)
+			c := &http.Cookie{Name: name, Value: value}
+			if i, exists := idx[name]; exists {
+				cookies[i] = c
+			} else {
+				idx[name] = len(cookies)
+				cookies = append(cookies, c)
+			}
 			log.Println("set cookie: ", name, value)
 		}
 	}
 
-	jar := req.Cookies()
-	req.Header.Del("Cookie")
-
 	if k.Exists("http_cookie_in.del") {
-		// Fix #1: build a delete-set first, then do a single pass over the jar.
-		// The old nested loop re-added "deleted" cookies on every subsequent iteration.
 		delSet := make(map[string]bool)
 		for _, name := range k.Strings("http_cookie_in.del") {
 			delSet[name] = true
 		}
-		for _, c := range jar {
+		filtered := cookies[:0]
+		for _, c := range cookies {
 			if delSet[c.Name] {
 				log.Println("remove cookie: ", c.Name)
 			} else {
-				req.AddCookie(c)
+				filtered = append(filtered, c)
 			}
 		}
+		cookies = filtered
 	}
 
-	jar = req.Cookies()
-	req.Header.Del("Cookie")
-
 	if k.Exists("http_cookie_in.only") {
-		var match bool
-		for _, c := range jar {
-			match = false
-			for _, name := range k.Strings("http_cookie_in.only") {
-				if name == c.Name {
-					match = true
-				}
-			}
-			if match == true {
-				req.AddCookie(c)
+		onlySet := make(map[string]bool)
+		for _, name := range k.Strings("http_cookie_in.only") {
+			onlySet[name] = true
+		}
+		filtered := cookies[:0]
+		for _, c := range cookies {
+			if onlySet[c.Name] {
+				filtered = append(filtered, c)
 			} else {
 				log.Println("remove cookie: ", c.Name)
 			}
 		}
+		cookies = filtered
+	}
+
+	req.Header.Del("Cookie")
+	for _, c := range cookies {
+		req.AddCookie(c)
 	}
 
 }
