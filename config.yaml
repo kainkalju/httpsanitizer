@@ -1,6 +1,6 @@
 ---
 upstream:
-  url: http://127.0.0.1:9000/
+  url: http://www.flycom.ee/
 #  exec: ./sleep.sh 60
 server:
   addr: ":8080"
@@ -48,6 +48,9 @@ sanitize_http_headers:
   strip_binary: true
   strip_html: true
   strip_sqlia: true
+# block_on_detect: true   # return 403 and drop request when a sanitizer fires (default: sanitize and forward)
+sanitize_json_body: true
+sanitize_xml_body: true
 sanitize_form_names:
   strip_chars: "'`/"
   strip_quotation: true

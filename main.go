@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"encoding/xml"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -23,6 +27,48 @@ import (
 
 // Global koanf instance. Use "." as the key path delimiter. This can be "/" or any character.
 var k = koanf.New(".")
+
+// blockKey is the context key used to carry a blockFlag through the request pipeline.
+type blockKey struct{}
+
+// blockFlag accumulates violation signals from sanitizing functions.
+// A non-nil, triggered flag causes blockingTransport to return a 403 instead of
+// forwarding the request to the upstream.
+type blockFlag struct {
+	triggered bool
+	reason    string
+}
+
+func (f *blockFlag) trigger(reason string) {
+	if !f.triggered {
+		f.triggered = true
+		f.reason = reason
+	}
+}
+
+// blockingTransport wraps the default RoundTripper. When a blockFlag in the
+// request context has been triggered it returns a synthetic 403 response without
+// ever contacting the upstream server.
+type blockingTransport struct{ base http.RoundTripper }
+
+func (t *blockingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if flag, ok := req.Context().Value(blockKey{}).(*blockFlag); ok && flag.triggered {
+		log.Printf("BLOCK: %s %s%s — %s", req.Method, req.Host, req.URL.RequestURI(), flag.reason)
+		body := "Forbidden\n"
+		return &http.Response{
+			StatusCode:    http.StatusForbidden,
+			Status:        "403 Forbidden",
+			Proto:         "HTTP/1.1",
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			Header:        make(http.Header),
+			Body:          ioutil.NopCloser(strings.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       req,
+		}, nil
+	}
+	return t.base.RoundTrip(req)
+}
 
 func main() {
 	configFile := flag.String("config", "config.yaml", "path to the YAML configuration file")
@@ -106,22 +152,30 @@ func main() {
 	// Fix #7: capture default director to preserve hop-by-hop header stripping and X-Forwarded-For handling
 	defaultDirector := reverseProxy.Director
 
+	// blockingTransport intercepts requests flagged for blocking before they reach upstream.
+	reverseProxy.Transport = &blockingTransport{base: http.DefaultTransport}
+
 	reverseProxy.Director = func(req *http.Request) {
 		// Call default director first: strips hop-by-hop headers, sets X-Forwarded-For, sets URL scheme/host
 		defaultDirector(req)
 
+		// Extract block flag injected by the route handler (nil when block_on_detect is off).
+		flag, _ := req.Context().Value(blockKey{}).(*blockFlag)
+
 		switch m := req.Method; m {
 		case "POST", "PUT", "PATCH":
-			sanitizingGET(req, k)
-			sanitizingPOST(req, k)
+			sanitizingGET(req, k, flag)
+			sanitizingJSONBody(req, k, flag)
+			sanitizingXMLBody(req, k, flag)
+			sanitizingPOST(req, k, flag)
 		default:
-			sanitizingGET(req, k)
+			sanitizingGET(req, k, flag)
 		}
 
 		sanitizingIncomingCookies(req, k)
 		req.Header.Add("X-Forwarded-Host", req.Host)
 		req.Header.Add("X-Origin-Host", origin.Host)
-		sanitizingIncomingHeaders(req, k)
+		sanitizingIncomingHeaders(req, k, flag)
 	}
 
 	reverseProxy.ModifyResponse = func(res *http.Response) error {
@@ -129,31 +183,21 @@ func main() {
 		return nil
 	}
 
-	router.Handle("HEAD", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	// Single handler shared by all methods. Injects a blockFlag into the request
+	// context when block_on_detect is enabled so the Director and blockingTransport
+	// can coordinate without changing the reverseProxy API.
+	handle := func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		startTime := time.Now()
+		if k.Bool("block_on_detect") {
+			r = r.WithContext(context.WithValue(r.Context(), blockKey{}, &blockFlag{}))
+		}
 		reverseProxy.ServeHTTP(w, r)
 		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
-	})
-	router.Handle("GET", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		startTime := time.Now()
-		reverseProxy.ServeHTTP(w, r)
-		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
-	})
-	router.Handle("PUT", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		startTime := time.Now()
-		reverseProxy.ServeHTTP(w, r)
-		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
-	})
-	router.Handle("DELETE", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		startTime := time.Now()
-		reverseProxy.ServeHTTP(w, r)
-		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
-	})
-	router.Handle("POST", path, func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		startTime := time.Now()
-		reverseProxy.ServeHTTP(w, r)
-		log.Printf("from: %s %s %s%s duration: %s\n", r.RemoteAddr, r.Method, r.Host, r.RequestURI, time.Since(startTime))
-	})
+	}
+
+	for _, method := range []string{"HEAD", "GET", "POST", "PUT", "DELETE"} {
+		router.Handle(method, path, handle)
+	}
 
 	server := &http.Server{
 		Addr:           serverAddr,
@@ -216,7 +260,7 @@ func sanitizingOutgoingHeaders(res *http.Response, k *koanf.Koanf) {
 
 }
 
-func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
+func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 
 	if k.Exists("http_header_in.set") {
 		for _, name := range k.MapKeys("http_header_in.set") {
@@ -254,12 +298,16 @@ func sanitizingIncomingHeaders(req *http.Request, k *koanf.Koanf) {
 		for name, values := range req.Header {
 			sanitized := make([]string, 0, len(values))
 			for _, value := range values {
+				original := value
 				value = validateMaxLen(k, p, value)
 				value = validateStripChars(k, p, value)
 				value = validateStripQuotation(k, p, value)
 				value = validateStripBinary(k, p, value)
 				value = validateStripHTML(k, p, value)
 				value = validateStripSQLia(k, p, value)
+				if flag != nil && value != original {
+					flag.trigger(fmt.Sprintf("header %q violated sanitize_http_headers policy", name))
+				}
 				sanitized = append(sanitized, value)
 			}
 			req.Header[name] = sanitized
@@ -332,7 +380,7 @@ func sanitizingIncomingCookies(req *http.Request, k *koanf.Koanf) {
 
 }
 
-func sanitizingGET(req *http.Request, k *koanf.Koanf) {
+func sanitizingGET(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 	data := url.Values{}
 	for name, values := range req.URL.Query() {
 		for _, value := range values {
@@ -344,7 +392,7 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 			}
 			if k.Exists(p) {
 				//log.Printf("get sanitizing: %v\n", name)
-
+				original := value
 				switch t := k.String(p + ".type"); t {
 				case "text":
 					value = validateMaxLen(k, p, value)
@@ -383,6 +431,9 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 					value = ""
 				default:
 				}
+				if flag != nil && value != original {
+					flag.trigger(fmt.Sprintf("query param %q violated form_params policy", name))
+				}
 			}
 			if k.Exists("sanitize_form_names") {
 				name = validateFormName(k, "sanitize_form_names", name)
@@ -394,14 +445,21 @@ func sanitizingGET(req *http.Request, k *koanf.Koanf) {
 	req.URL.RawQuery = data.Encode()
 }
 
-func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
+func sanitizingPOST(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
 	// Fix #2: only process application/x-www-form-urlencoded bodies.
 	// For any other Content-Type (multipart/form-data, application/json, etc.),
 	// ParseForm silently does nothing, then the original body would be forwarded unsanitized.
-	// If form_params rules are configured, discard non-urlencoded bodies entirely.
-	ct := req.Header.Get("Content-Type")
-	if !strings.HasPrefix(strings.TrimSpace(ct), "application/x-www-form-urlencoded") {
+	// If form_params rules are configured, discard non-urlencoded bodies entirely,
+	// unless a dedicated body sanitizer already handled this Content-Type.
+	ct := strings.TrimSpace(req.Header.Get("Content-Type"))
+	if !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
 		if k.Exists("form_params") {
+			isJSON := strings.HasPrefix(ct, "application/json")
+			isXML := strings.HasPrefix(ct, "text/xml") || strings.HasPrefix(ct, "application/xml")
+			if (isJSON && k.Exists("sanitize_json_body")) || (isXML && k.Exists("sanitize_xml_body")) {
+				// Already sanitized by the dedicated handler above; leave body as-is.
+				return
+			}
 			log.Printf("sanitizingPOST: unsupported Content-Type %q; discarding body to enforce form_params rules", ct)
 			req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
 			req.ContentLength = 0
@@ -424,7 +482,7 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 			}
 			if k.Exists(p) {
 				//log.Printf("post sanitizing: %v\n", name)
-
+				original := value
 				switch t := k.String(p + ".type"); t {
 				case "text":
 					value = validateMaxLen(k, p, value)
@@ -463,6 +521,9 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 					value = ""
 				default:
 				}
+				if flag != nil && value != original {
+					flag.trigger(fmt.Sprintf("POST param %q violated form_params policy", name))
+				}
 			}
 			if k.Exists("sanitize_form_names") {
 				name = validateFormName(k, "sanitize_form_names", name)
@@ -474,6 +535,205 @@ func sanitizingPOST(req *http.Request, k *koanf.Koanf) {
 	newBody := data.Encode()
 	req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(newBody)))
 	req.ContentLength = int64(len(newBody))
+}
+
+// sanitizeBodyField applies form_params rules for a named field.
+// Falls back to _defaults_ when no per-field rule exists.
+// flag may be nil; when non-nil a detected violation triggers a block.
+func sanitizeBodyField(k *koanf.Koanf, fieldName string, value string, flag *blockFlag) string {
+	p := "form_params." + fieldName
+	if !k.Exists(p) {
+		if k.Exists("form_params._defaults_") {
+			p = "form_params._defaults_"
+		}
+	}
+	if !k.Exists(p) {
+		return value
+	}
+	original := value
+	switch t := k.String(p + ".type"); t {
+	case "text":
+		value = validateMaxLen(k, p, value)
+		value = validateStripChars(k, p, value)
+		value = validateStripQuotation(k, p, value)
+		value = validateStripBinary(k, p, value)
+		value = validateStripHTML(k, p, value)
+		value = validateStripSQLia(k, p, value)
+	case "numeric":
+		value = validateNumeric(value)
+	case "email":
+		value = validateMaxLen(k, p, value)
+		value = validateStripChars(k, p, value)
+		value = validateStripBinary(k, p, value)
+		value = validateEmail(value)
+	case "ip":
+		value = validateIP(value)
+	case "url":
+		value = validateMaxLen(k, p, value)
+		value = validateStripChars(k, p, value)
+		value = validateStripBinary(k, p, value)
+		value = validateURL(value)
+	case "path":
+		value = validateMaxLen(k, p, value)
+		value = validateStripChars(k, p, value)
+		value = validateStripBinary(k, p, value)
+		value = validatePath(value)
+	case "filename":
+		value = validateMaxLen(k, p, value)
+		value = validateStripChars(k, p, value)
+		value = validateStripBinary(k, p, value)
+		value = validateFilePath(value)
+	case "unixtime":
+		value = validateUnixTime(value)
+	case "absent":
+		value = ""
+	}
+	if flag != nil && value != original {
+		flag.trigger(fmt.Sprintf("body field %q violated form_params policy", fieldName))
+	}
+	return value
+}
+
+// sanitizingJSONBody sanitizes string values in a JSON request body.
+// Enabled by setting sanitize_json_body: true in config.
+// Field-level rules are sourced from form_params (with _defaults_ fallback).
+func sanitizingJSONBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
+	if !k.Exists("sanitize_json_body") {
+		return
+	}
+	if !strings.HasPrefix(strings.TrimSpace(req.Header.Get("Content-Type")), "application/json") {
+		return
+	}
+
+	body, err := ioutil.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		log.Printf("sanitizingJSONBody: read error: %v; discarding body", err)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
+		req.ContentLength = 0
+		return
+	}
+
+	var data interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		log.Printf("sanitizingJSONBody: invalid JSON, discarding body: %v", err)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
+		req.ContentLength = 0
+		return
+	}
+
+	data = sanitizeJSONNode(k, "", data, flag)
+
+	sanitized, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("sanitizingJSONBody: marshal error: %v; forwarding original body", err)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		req.ContentLength = int64(len(body))
+		return
+	}
+
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(sanitized))
+	req.ContentLength = int64(len(sanitized))
+}
+
+// sanitizeJSONNode recursively walks a decoded JSON value and sanitizes all strings.
+// Object keys are used as field names for form_params lookup.
+// Array items inherit the field name of their parent array.
+func sanitizeJSONNode(k *koanf.Koanf, key string, val interface{}, flag *blockFlag) interface{} {
+	switch v := val.(type) {
+	case string:
+		return sanitizeBodyField(k, key, v, flag)
+	case map[string]interface{}:
+		for field, child := range v {
+			v[field] = sanitizeJSONNode(k, field, child, flag)
+		}
+		return v
+	case []interface{}:
+		for i, item := range v {
+			v[i] = sanitizeJSONNode(k, key, item, flag)
+		}
+		return v
+	default:
+		// numbers, booleans, null — no sanitization needed
+		return val
+	}
+}
+
+// sanitizingXMLBody sanitizes character data and attribute values in an XML request body.
+// Enabled by setting sanitize_xml_body: true in config.
+// Field-level rules are sourced from form_params (with _defaults_ fallback).
+func sanitizingXMLBody(req *http.Request, k *koanf.Koanf, flag *blockFlag) {
+	if !k.Exists("sanitize_xml_body") {
+		return
+	}
+	ct := strings.TrimSpace(req.Header.Get("Content-Type"))
+	if !strings.HasPrefix(ct, "text/xml") && !strings.HasPrefix(ct, "application/xml") {
+		return
+	}
+
+	body, err := ioutil.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		log.Printf("sanitizingXMLBody: read error: %v; discarding body", err)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
+		req.ContentLength = 0
+		return
+	}
+
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	var buf bytes.Buffer
+	encoder := xml.NewEncoder(&buf)
+	var elementStack []string
+
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("sanitizingXMLBody: invalid XML, discarding body: %v", err)
+			req.Body = ioutil.NopCloser(bytes.NewBuffer(nil))
+			req.ContentLength = 0
+			return
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			elementStack = append(elementStack, t.Name.Local)
+			for i, attr := range t.Attr {
+				t.Attr[i].Value = sanitizeBodyField(k, attr.Name.Local, attr.Value, flag)
+			}
+			encoder.EncodeToken(t)
+		case xml.EndElement:
+			if len(elementStack) > 0 {
+				elementStack = elementStack[:len(elementStack)-1]
+			}
+			encoder.EncodeToken(t)
+		case xml.CharData:
+			currentElement := ""
+			if len(elementStack) > 0 {
+				currentElement = elementStack[len(elementStack)-1]
+			}
+			// Copy: the underlying byte slice is reused across Token() calls.
+			data := make(xml.CharData, len(t))
+			copy(data, t)
+			sanitized := sanitizeBodyField(k, currentElement, string(data), flag)
+			encoder.EncodeToken(xml.CharData(sanitized))
+		default:
+			encoder.EncodeToken(tok)
+		}
+	}
+
+	if err := encoder.Flush(); err != nil {
+		log.Printf("sanitizingXMLBody: flush error: %v; forwarding original body", err)
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		req.ContentLength = int64(len(body))
+		return
+	}
+
+	sanitized := buf.Bytes()
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(sanitized))
+	req.ContentLength = int64(len(sanitized))
 }
 
 func validateFormName(k *koanf.Koanf, name string, value string) string {
