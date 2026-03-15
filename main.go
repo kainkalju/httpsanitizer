@@ -55,16 +55,16 @@ func main() {
 	if k.Exists("server.addr") {
 		serverAddr = k.String("server.addr")
 	}
-	if k.Exists("server.addr") {
+	if k.Exists("server.readTimeout") {
 		serverReadTimeout = time.Duration(k.Int("server.readTimeout"))
 	}
-	if k.Exists("server.addr") {
+	if k.Exists("server.writeTimeout") {
 		serverWriteTimeout = time.Duration(k.Int("server.writeTimeout"))
 	}
-	if k.Exists("server.addr") {
+	if k.Exists("server.idleTimeout") {
 		serverIdleTimeout = time.Duration(k.Int("server.idleTimeout"))
 	}
-	if k.Exists("server.addr") {
+	if k.Exists("server.maxHeaderBytes") {
 		serverMaxHeaderBytes = k.Int("server.maxHeaderBytes")
 	}
 	// Watch the file and get a callback on change. The callback can do whatever,
