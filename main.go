@@ -111,7 +111,7 @@ func main() {
 		defaultDirector(req)
 
 		switch m := req.Method; m {
-		case "POST", "PUT":
+		case "POST", "PUT", "PATCH":
 			sanitizingGET(req, k)
 			sanitizingPOST(req, k)
 		default:
@@ -554,20 +554,20 @@ func validateStripSQLia(k *koanf.Koanf, name string, value string) string {
 					break // No more occurrences in this keyword
 				}
 				realIdx := offset + idx
-				
+
 				// Verify it is a whole word (not embedded inside another identifier)
 				before := realIdx == 0 || !isAlphaNum(rune(s[realIdx-1]))
 				after := realIdx+len(kw) >= len(s) || !isAlphaNum(rune(s[realIdx+len(kw)]))
-				
+
 				if before && after {
 					match = true
 					break
 				}
-				
+
 				// Move past this occurrence
 				offset = realIdx + len(kw)
 			}
-			
+
 			if match {
 				break
 			}
